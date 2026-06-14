@@ -54,9 +54,12 @@ export default function App() {
 
       setIsFetchingInfo(true);
       try {
-        // Променено: Търси по-широко, а не само стриктно в заглавието
         const searchQuery = activeField === 'title' ? query : `inauthor:${query}`;
-        const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${searchQuery}&maxResults=8`);
+        
+        // ТУК Е ПОПРАВКАТА: encodeURIComponent прави шпациите безопасни за линка
+        const safeQuery = encodeURIComponent(searchQuery);
+        const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${safeQuery}&maxResults=8`);
+        
         const data = await response.json();
 
         if (data.items) {
@@ -64,7 +67,6 @@ export default function App() {
             id: item.id,
             title: item.volumeInfo.title || '',
             author: item.volumeInfo.authors ? item.volumeInfo.authors.join(', ') : 'Неизвестен автор',
-            // Взимаме корицата и правим линка сигурен (https)
             coverUrl: item.volumeInfo.imageLinks?.thumbnail?.replace('http:', 'https:') || null
           }));
           setSuggestions(results);
