@@ -16,7 +16,7 @@ export default function App() {
     title: '', author: '', customImages: [], isPublic: true, isAvailable: false
   });
 
-  // --- НОВИ AI (API) СЪСТОЯНИЯ ---
+  // --- AI (API) СЪСТОЯНИЯ ---
   const [suggestions, setSuggestions] = useState([]);
   const [isFetchingInfo, setIsFetchingInfo] = useState(false);
   const [activeField, setActiveField] = useState(null); // 'title' или 'author'
@@ -41,7 +41,7 @@ export default function App() {
     setLoading(false);
   }, []);
 
-  // --- ИСТИНСКА ИНТЕГРАЦИЯ С GOOGLE BOOKS API ---
+  // --- ИНТЕГРАЦИЯ С GOOGLE BOOKS API ---
   useEffect(() => {
     const fetchBooksInfo = async () => {
       const query = activeField === 'title' ? newBook.title : newBook.author;
@@ -54,14 +54,12 @@ export default function App() {
 
       setIsFetchingInfo(true);
       try {
-        // Формираме търсенето (intitle: търси в заглавия, inauthor: търси в автори)
-        const searchQuery = activeField === 'title' ? `intitle:${query}` : `inauthor:${query}`;
-        // Добавяме langRestrict=bg за по-добри резултати на български, но не е задължително
-        const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${searchQuery}&maxResults=5`);
+        // Променено: Търси по-широко, а не само стриктно в заглавието
+        const searchQuery = activeField === 'title' ? query : `inauthor:${query}`;
+        const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${searchQuery}&maxResults=8`);
         const data = await response.json();
 
         if (data.items) {
-          // Взимаме само уникални книги
           const results = data.items.map(item => ({
             id: item.id,
             title: item.volumeInfo.title || '',
@@ -79,7 +77,6 @@ export default function App() {
       setIsFetchingInfo(false);
     };
 
-    // Слагаме таймер (debounce), за да не спамим Google при всяка натисната буква
     const delayTimer = setTimeout(fetchBooksInfo, 800);
     return () => clearTimeout(delayTimer);
   }, [newBook.title, newBook.author, activeField]);
