@@ -13,20 +13,19 @@ export default function App() {
   
   const fileInputRef = useRef(null);
 
-  // Обновено състояние на книгата с новите полета
   const [newBook, setNewBook] = useState({
     title: '', author: '', publisher: '', year: '', genre: '', description: '',
     customImages: [], isPublic: true, isAvailable: false
   });
 
-  const [editingId, setEditingId] = useState(null); // За редакция
-  const [searchMyBooks, setSearchMyBooks] = useState(''); // За търсене в моите книги
+  const [editingId, setEditingId] = useState(null);
+  const [searchMyBooks, setSearchMyBooks] = useState('');
 
   const [suggestions, setSuggestions] = useState([]);
   const [isFetchingInfo, setIsFetchingInfo] = useState(false);
   const [activeField, setActiveField] = useState(null); 
   const [hasSearched, setHasSearched] = useState(false); 
-  const [isScanning, setIsScanning] = useState(false); // За OCR
+  const [isScanning, setIsScanning] = useState(false);
 
   const [requestBookModal, setRequestBookModal] = useState(null);
   const [exchangeMessage, setExchangeMessage] = useState('');
@@ -40,7 +39,6 @@ export default function App() {
     }
   ]);
 
-  // Зареждане от паметта
   useEffect(() => {
     const savedBooks = localStorage.getItem('my_local_library');
     if (savedBooks) setBooks(JSON.parse(savedBooks));
@@ -48,14 +46,12 @@ export default function App() {
     setLoading(false);
   }, []);
 
-  // Автоматично запазване при всяка промяна
   useEffect(() => {
     if (!initialLoad) {
       localStorage.setItem('my_local_library', JSON.stringify(books));
     }
   }, [books, initialLoad]);
 
-  // Търсачка с Open Library
   useEffect(() => {
     const fetchBooksInfo = async () => {
       const query = activeField === 'title' ? newBook.title : newBook.author;
@@ -111,19 +107,18 @@ export default function App() {
       author: suggestion.author,
       year: suggestion.year,
       publisher: suggestion.publisher,
-      customImages: suggestion.coverUrl ? [suggestion.coverUrl] : prev.customImages
+      // Ако вече имаме наши снимки, не ги презаписваме с тази от интернет
+      customImages: prev.customImages.length > 0 ? prev.customImages : (suggestion.coverUrl ? [suggestion.coverUrl] : [])
     }));
     setSuggestions([]);
     setActiveField(null);
     setHasSearched(false);
   };
 
-  // Разпознаване на текст от снимка (OCR)
   const handleScanText = async () => {
-    if (!newBook.customImages[0]) return;
+    if (newBook.customImages.length === 0) return;
     setIsScanning(true);
     try {
-      // Зареждаме Tesseract.js динамично, за да не чупим Netlify
       if (!window.Tesseract) {
         await new Promise((resolve) => {
           const script = document.createElement('script');
@@ -132,6 +127,7 @@ export default function App() {
           document.head.appendChild(script);
         });
       }
+      // Винаги сканираме първата снимка
       const result = await window.Tesseract.recognize(newBook.customImages[0], 'bul+eng');
       const extractedText = result.data.text.trim();
       
@@ -157,11 +153,13 @@ export default function App() {
 
     setTimeout(() => {
       if (editingId) {
-        // Редактиране на съществуваща
-        setBooks(books.map(b => b.id === editingId ? { ...newBook, id: editingId, coverUrl: newBook.customImages[0] || b.coverUrl } : b));
+        setBooks(books.map(b => b.id === editingId ? { 
+          ...newBook, 
+          id: editingId, 
+          coverUrl: newBook.customImages[0] || null
+        } : b));
         setEditingId(null);
       } else {
-        // Добавяне на нова
         const bookToAdd = { 
           ...newBook, 
           id: Date.now(), 
@@ -183,7 +181,7 @@ export default function App() {
       year: book.year || '',
       genre: book.genre || '',
       description: book.description || '',
-      customImages: book.coverUrl ? [book.coverUrl] : [],
+      customImages: book.customImages || (book.coverUrl ? [book.coverUrl] : []),
       isPublic: book.isPublic || false,
       isAvailable: book.isAvailable || false
     });
@@ -202,7 +200,6 @@ export default function App() {
     setEditingId(null);
   };
 
-  // Филтриране на книгите
   const filteredBooks = books.filter(b => 
     b.title.toLowerCase().includes(searchMyBooks.toLowerCase()) || 
     b.author.toLowerCase().includes(searchMyBooks.toLowerCase())
@@ -227,7 +224,6 @@ export default function App() {
 
         {activeTab === 'library' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-in fade-in">
-            {/* ФОРМА ЗА ДОБАВЯНЕ/РЕДАКЦИЯ */}
             <div className="lg:col-span-4">
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 lg:sticky lg:top-8">
                 <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-4">
@@ -238,31 +234,41 @@ export default function App() {
                   <input type="file" accept="image/*" capture="environment" ref={fileInputRef} onChange={(e) => {
                     const file = e.target.files?.[0];
                     if(file) {
+                       if (newBook.customImages.length >= 5) {
+                         alert("Можеш да добавиш максимум 5 снимки.");
+                         return;
+                       }
                        const reader = new FileReader();
-                       reader.onload = (ev) => setNewBook(prev => ({...prev, customImages: [ev.target.result]}));
+                       reader.onload = (ev) => setNewBook(prev => ({...prev, customImages: [...prev.customImages, ev.target.result]}));
                        reader.readAsDataURL(file);
                     }
                   }} className="hidden" />
-                  <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg">
+                  <button type="button" onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg">
                     <Camera size={16} /> Снимай
                   </button>
                 </div>
                 
-                {newBook.customImages[0] && (
+                {/* ГАЛЕРИЯ СЪС СНИМКИ */}
+                {newBook.customImages.length > 0 && (
                    <div className="mb-4">
-                     <div className="relative w-24 h-32 mx-auto rounded-lg overflow-hidden shadow-md border border-slate-200">
-                        <img src={newBook.customImages[0]} alt="Корица" className="w-full h-full object-cover" />
-                        <button onClick={() => setNewBook(prev => ({...prev, customImages: []}))} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1"><X size={12}/></button>
+                     <div className="flex gap-3 overflow-x-auto pb-2 snap-x">
+                       {newBook.customImages.map((img, idx) => (
+                         <div key={idx} className="relative w-24 h-32 flex-shrink-0 rounded-lg overflow-hidden shadow-md border border-slate-200 snap-center">
+                            <img src={img} alt={`Снимка ${idx + 1}`} className="w-full h-full object-cover" />
+                            <button type="button" onClick={() => setNewBook(prev => ({...prev, customImages: prev.customImages.filter((_, i) => i !== idx)}))} className="absolute top-1 right-1 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 transition-colors z-10">
+                              <X size={12}/>
+                            </button>
+                         </div>
+                       ))}
                      </div>
-                     <button onClick={handleScanText} disabled={isScanning} className="mt-3 w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors">
+                     <button type="button" onClick={handleScanText} disabled={isScanning} className="mt-3 w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors">
                         {isScanning ? <Loader2 size={16} className="animate-spin" /> : <ScanText size={16} />} 
-                        {isScanning ? "Разпознаване..." : "Извлечи текст от снимката"}
+                        {isScanning ? "Разпознаване..." : "Извлечи текст от първата снимка"}
                      </button>
                    </div>
                 )}
 
                 <form onSubmit={handleAddBook} className="space-y-4">
-                  {/* ОСНОВНИ ПОЛЕТА */}
                   <div className="relative">
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Заглавие *</label>
                     <input type="text" required value={newBook.title} onChange={(e) => { setNewBook({...newBook, title: e.target.value}); setActiveField('title'); }} onFocus={() => setActiveField('title')} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" />
@@ -296,7 +302,6 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* ДОПЪЛНИТЕЛНИ ПОЛЕТА */}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Издателство</label>
@@ -342,7 +347,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* СПИСЪК С КНИГИ И ТЪРСАЧКА */}
             <div className="lg:col-span-8">
               <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 mb-6 flex items-center gap-3">
                 <Search size={20} className="text-slate-400" />
@@ -353,7 +357,7 @@ export default function App() {
                   placeholder="Търси в твоята библиотека по заглавие или автор..." 
                   className="flex-1 bg-transparent outline-none text-sm"
                 />
-                {searchMyBooks && <button onClick={() => setSearchMyBooks('')}><X size={16} className="text-slate-400"/></button>}
+                {searchMyBooks && <button type="button" onClick={() => setSearchMyBooks('')}><X size={16} className="text-slate-400"/></button>}
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -381,10 +385,9 @@ export default function App() {
                         </div>
                       </div>
                       
-                      {/* Бутони за редакция и триене - показват се при ховър (или винаги на мобилни) */}
                       <div className="absolute top-2 right-2 flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity bg-white/90 rounded-lg p-1 shadow-sm backdrop-blur-sm">
-                        <button onClick={() => handleEditBook(book)} className="p-1.5 text-slate-500 hover:text-amber-500 rounded bg-white"><Edit3 size={14}/></button>
-                        <button onClick={() => handleDeleteBook(book.id)} className="p-1.5 text-slate-500 hover:text-red-500 rounded bg-white"><Trash2 size={14}/></button>
+                        <button type="button" onClick={() => handleEditBook(book)} className="p-1.5 text-slate-500 hover:text-amber-500 rounded bg-white"><Edit3 size={14}/></button>
+                        <button type="button" onClick={() => handleDeleteBook(book.id)} className="p-1.5 text-slate-500 hover:text-red-500 rounded bg-white"><Trash2 size={14}/></button>
                       </div>
                     </div>
                   );
@@ -393,8 +396,6 @@ export default function App() {
             </div>
           </div>
         )}
-
-        {/* ... (Социалният фийд остава същият) */}
       </div>
     </div>
   );
