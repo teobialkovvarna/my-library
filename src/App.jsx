@@ -27,9 +27,7 @@ export default function App() {
   const [hasSearched, setHasSearched] = useState(false); 
   const [isScanning, setIsScanning] = useState(false);
 
-  const [requestBookModal, setRequestBookModal] = useState(null);
-  const [exchangeMessage, setExchangeMessage] = useState('');
-
+  // Измислени данни за общността
   const [communityFeed, setCommunityFeed] = useState([
     {
       id: 101, userName: "Стелиян Стефанов", userAvatar: "СС", action: "предлага за заемане",
@@ -52,6 +50,7 @@ export default function App() {
     }
   }, [books, initialLoad]);
 
+  // --- ДВОЙНА ТЪРСАЧКА (Google Books + Open Library Fallback) ---
   useEffect(() => {
     const fetchBooksInfo = async () => {
       const query = activeField === 'title' ? newBook.title : newBook.author;
@@ -67,26 +66,46 @@ export default function App() {
 
       try {
         const safeQuery = encodeURIComponent(query);
-        const url = activeField === 'title' 
-          ? `https://openlibrary.org/search.json?title=${safeQuery}&limit=8`
-          : `https://openlibrary.org/search.json?author=${safeQuery}&limit=8`;
-        
-        const response = await fetch(url);
-        const data = await response.json();
+        let results = [];
 
-        if (data.docs && data.docs.length > 0) {
-          const results = data.docs.map(doc => ({
-            id: doc.key,
-            title: doc.title,
-            author: doc.author_name ? doc.author_name[0] : 'Неизвестен автор',
-            year: doc.first_publish_year ? doc.first_publish_year.toString() : '',
-            publisher: doc.publisher ? doc.publisher[0] : '',
-            coverUrl: doc.cover_i ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg` : null
+        // 1. ОПИТ В GOOGLE BOOKS (Най-добро за български език)
+        // Търсим общо, за да не изпускаме книги заради стриктни филтри
+        const gbResponse = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${safeQuery}&maxResults=8`);
+        const gbData = await gbResponse.json();
+
+        if (gbData.items && gbData.items.length > 0) {
+          results = gbData.items.map(item => ({
+            id: item.id,
+            title: item.volumeInfo.title || '',
+            author: item.volumeInfo.authors ? item.volumeInfo.authors.join(', ') : 'Неизвестен автор',
+            year: item.volumeInfo.publishedDate ? item.volumeInfo.publishedDate.substring(0,4) : '',
+            publisher: item.volumeInfo.publisher || '',
+            coverUrl: item.volumeInfo.imageLinks?.thumbnail?.replace('http:', 'https:') || null
           }));
-          setSuggestions(results);
-        } else {
-          setSuggestions([]);
         }
+
+        // 2. АКО GOOGLE НЯМА РЕЗУЛТАТИ, ПИТАМЕ OPEN LIBRARY
+        if (results.length === 0) {
+          const olUrl = activeField === 'title' 
+            ? `https://openlibrary.org/search.json?title=${safeQuery}&limit=8`
+            : `https://openlibrary.org/search.json?author=${safeQuery}&limit=8`;
+          
+          const olResponse = await fetch(olUrl);
+          const olData = await olResponse.json();
+
+          if (olData.docs && olData.docs.length > 0) {
+            results = olData.docs.map(doc => ({
+              id: doc.key,
+              title: doc.title,
+              author: doc.author_name ? doc.author_name[0] : 'Неизвестен автор',
+              year: doc.first_publish_year ? doc.first_publish_year.toString() : '',
+              publisher: doc.publisher ? doc.publisher[0] : '',
+              coverUrl: doc.cover_i ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg` : null
+            }));
+          }
+        }
+
+        setSuggestions(results);
       } catch (error) {
         console.error("Грешка при търсене:", error);
         setSuggestions([]);
@@ -107,7 +126,6 @@ export default function App() {
       author: suggestion.author,
       year: suggestion.year,
       publisher: suggestion.publisher,
-      // Ако вече имаме наши снимки, не ги презаписваме с тази от интернет
       customImages: prev.customImages.length > 0 ? prev.customImages : (suggestion.coverUrl ? [suggestion.coverUrl] : [])
     }));
     setSuggestions([]);
@@ -127,7 +145,6 @@ export default function App() {
           document.head.appendChild(script);
         });
       }
-      // Винаги сканираме първата снимка
       const result = await window.Tesseract.recognize(newBook.customImages[0], 'bul+eng');
       const extractedText = result.data.text.trim();
       
@@ -153,18 +170,10 @@ export default function App() {
 
     setTimeout(() => {
       if (editingId) {
-        setBooks(books.map(b => b.id === editingId ? { 
-          ...newBook, 
-          id: editingId, 
-          coverUrl: newBook.customImages[0] || null
-        } : b));
+        setBooks(books.map(b => b.id === editingId ? { ...newBook, id: editingId, coverUrl: newBook.customImages[0] || null } : b));
         setEditingId(null);
       } else {
-        const bookToAdd = { 
-          ...newBook, 
-          id: Date.now(), 
-          coverUrl: newBook.customImages[0] || null
-        };
+        const bookToAdd = { ...newBook, id: Date.now(), coverUrl: newBook.customImages[0] || null };
         setBooks([bookToAdd, ...books]);
       }
       
@@ -248,7 +257,6 @@ export default function App() {
                   </button>
                 </div>
                 
-                {/* ГАЛЕРИЯ СЪС СНИМКИ */}
                 {newBook.customImages.length > 0 && (
                    <div className="mb-4">
                      <div className="flex gap-3 overflow-x-auto pb-2 snap-x">
@@ -298,7 +306,7 @@ export default function App() {
                       ) : hasSearched ? (
                         <div className="px-4 py-4 text-slate-500 text-sm text-center bg-slate-50"><p>Няма намерени резултати.</p></div>
                       ) : null}
-                      <button type="button" onClick={() => {setSuggestions([]); setActiveField(null); setHasSearched(false);}} className="w-full py-2 bg-slate-100 text-xs text-slate-500 hover:bg-slate-200 font-medium">Затвори менюто</button>
+                      <button type="button" onClick={() => {setSuggestions([]); setActiveField(null); setHasSearched(false);}} className="w-full py-2 bg-slate-100 text-xs text-slate-500 hover:bg-slate-200 font-medium border-t border-slate-200">Затвори менюто</button>
                     </div>
                   )}
 
