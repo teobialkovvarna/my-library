@@ -1,15 +1,49 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, addDoc, getDocs, deleteDoc, doc, updateDoc } from "firebase/firestore";
 import { 
   Book, Plus, Trash2, LibraryBig, BookOpen, X, Loader2, Camera,
   Globe, BookUp, Send, MapPin, ThumbsUp, Search, Info, Edit3, ScanText
 } from 'lucide-react';
+
+// Твоите Firebase ключове
+const firebaseConfig = {
+  apiKey: "AIzaSyDPmKDJRS7fyAbU6tDFXpNp3UOjyHYE2ks",
+  authDomain: "my-home-library-80de4.firebaseapp.com",
+  projectId: "my-home-library-80de4",
+  storageBucket: "my-home-library-80de4.firebasestorage.app",
+  messagingSenderId: "596828459314",
+  appId: "1:596828459314:web:e60bd5d9aae274ad07472b"
+};
+
+// Стартиране на базата данни
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+const LOCAL_BULGARIAN_DB = [
+  { 
+    title: "Скалният крал", author: "Карл Май", year: "1980", publisher: "Отечество", genre: "Приключенски роман",
+    description: "Въведена директно от Chitanka.info. Класически приключенски роман от Карл Май."
+  },
+  { 
+    title: "Тримата мускетари", author: "Александър Дюма", year: "1844", publisher: "Георги Бакалов", genre: "Исторически роман",
+    description: "Вечната класика на Александър Дюма за Атос, Портос, Арамис и д'Артанян."
+  },
+  { 
+    title: "Граф Монте Кристо", author: "Александър Дюма", year: "1844", publisher: "Труд", genre: "Роман",
+    description: "Историята на Едмон Дантес и неговото отмъщение."
+  },
+  { 
+    title: "Повест за истинския човек", author: "Борис Полевой", year: "1946", publisher: "Народна култура", genre: "Военна повест",
+    description: "Повест за съветския летец Алексей Мересиев."
+  }
+];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('library');
   const [books, setBooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
-  const [initialLoad, setInitialLoad] = useState(true);
   
   const fileInputRef = useRef(null);
 
@@ -20,37 +54,34 @@ export default function App() {
 
   const [editingId, setEditingId] = useState(null);
   const [searchMyBooks, setSearchMyBooks] = useState('');
-
   const [suggestions, setSuggestions] = useState([]);
   const [isFetchingInfo, setIsFetchingInfo] = useState(false);
   const [activeField, setActiveField] = useState(null); 
   const [hasSearched, setHasSearched] = useState(false); 
   const [isScanning, setIsScanning] = useState(false);
 
-  // Измислени данни за общността
-  const [communityFeed, setCommunityFeed] = useState([
-    {
-      id: 101, userName: "Стелиян Стефанов", userAvatar: "СС", action: "предлага за заемане",
-      bookTitle: "Времеубежище", bookAuthor: "Георги Господинов", coverUrl: "https://covers.openlibrary.org/b/id/10521270-M.jpg",
-      review: "Свободна е, ако някой иска да я заеме за няколко седмици!", likes: 12, timeAgo: "преди 2 часа",
-      isAvailable: true, location: "Варна (Бизнес Парк)"
-    }
-  ]);
-
+  // ИЗТЕГЛЯНЕ НА КНИГИТЕ ОТ ОБЛАКА (ФИРЕБЕЙС)
   useEffect(() => {
-    const savedBooks = localStorage.getItem('my_local_library');
-    if (savedBooks) setBooks(JSON.parse(savedBooks));
-    setInitialLoad(false);
-    setLoading(false);
+    const fetchBooks = async () => {
+      try {
+        const querySnapshot = await getDocs(collection(db, "global_books"));
+        const booksArray = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        // Сортиране - най-новите първи
+        booksArray.sort((a, b) => b.createdAt - a.createdAt);
+        setBooks(booksArray);
+      } catch (error) {
+        console.error("Грешка при теглене от базата: ", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchBooks();
   }, []);
 
-  useEffect(() => {
-    if (!initialLoad) {
-      localStorage.setItem('my_local_library', JSON.stringify(books));
-    }
-  }, [books, initialLoad]);
-
-  // --- ДВОЙНА ТЪРСАЧКА (Google Books + Open Library Fallback) ---
   useEffect(() => {
     const fetchBooksInfo = async () => {
       const query = activeField === 'title' ? newBook.title : newBook.author;
@@ -64,51 +95,35 @@ export default function App() {
       setIsFetchingInfo(true);
       setHasSearched(false);
 
+      const localMatches = LOCAL_BULGARIAN_DB.filter(b => {
+        const target = activeField === 'title' ? b.title : b.author;
+        return target.toLowerCase().includes(query.toLowerCase());
+      }).map((b, i) => ({
+        id: `local-${i}`, title: b.title, author: b.author, year: b.year, publisher: b.publisher,
+        genre: b.genre, description: b.description, coverUrl: null, isLocal: true
+      }));
+
       try {
         const safeQuery = encodeURIComponent(query);
-        let results = [];
+        let apiResults = [];
 
-        // 1. ОПИТ В GOOGLE BOOKS (Най-добро за български език)
-        // Търсим общо, за да не изпускаме книги заради стриктни филтри
-        const gbResponse = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${safeQuery}&maxResults=8`);
+        const gbResponse = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${safeQuery}&maxResults=5`);
         const gbData = await gbResponse.json();
 
         if (gbData.items && gbData.items.length > 0) {
-          results = gbData.items.map(item => ({
-            id: item.id,
-            title: item.volumeInfo.title || '',
+          apiResults = gbData.items.map(item => ({
+            id: item.id, title: item.volumeInfo.title || '',
             author: item.volumeInfo.authors ? item.volumeInfo.authors.join(', ') : 'Неизвестен автор',
             year: item.volumeInfo.publishedDate ? item.volumeInfo.publishedDate.substring(0,4) : '',
             publisher: item.volumeInfo.publisher || '',
-            coverUrl: item.volumeInfo.imageLinks?.thumbnail?.replace('http:', 'https:') || null
+            coverUrl: item.volumeInfo.imageLinks?.thumbnail?.replace('http:', 'https:') || null,
+            isLocal: false
           }));
         }
 
-        // 2. АКО GOOGLE НЯМА РЕЗУЛТАТИ, ПИТАМЕ OPEN LIBRARY
-        if (results.length === 0) {
-          const olUrl = activeField === 'title' 
-            ? `https://openlibrary.org/search.json?title=${safeQuery}&limit=8`
-            : `https://openlibrary.org/search.json?author=${safeQuery}&limit=8`;
-          
-          const olResponse = await fetch(olUrl);
-          const olData = await olResponse.json();
-
-          if (olData.docs && olData.docs.length > 0) {
-            results = olData.docs.map(doc => ({
-              id: doc.key,
-              title: doc.title,
-              author: doc.author_name ? doc.author_name[0] : 'Неизвестен автор',
-              year: doc.first_publish_year ? doc.first_publish_year.toString() : '',
-              publisher: doc.publisher ? doc.publisher[0] : '',
-              coverUrl: doc.cover_i ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg` : null
-            }));
-          }
-        }
-
-        setSuggestions(results);
+        setSuggestions([...localMatches, ...apiResults]);
       } catch (error) {
-        console.error("Грешка при търсене:", error);
-        setSuggestions([]);
+        setSuggestions(localMatches); 
       }
       
       setIsFetchingInfo(false);
@@ -122,11 +137,9 @@ export default function App() {
   const handleSelectSuggestion = (suggestion) => {
     setNewBook(prev => ({
       ...prev,
-      title: suggestion.title,
-      author: suggestion.author,
-      year: suggestion.year,
-      publisher: suggestion.publisher,
-      customImages: prev.customImages.length > 0 ? prev.customImages : (suggestion.coverUrl ? [suggestion.coverUrl] : [])
+      title: suggestion.title, author: suggestion.author, year: suggestion.year || '',
+      publisher: suggestion.publisher || '', genre: suggestion.genre || '', description: suggestion.description || '',
+      customImages: suggestion.coverUrl ? [suggestion.coverUrl] : prev.customImages
     }));
     setSuggestions([]);
     setActiveField(null);
@@ -153,54 +166,73 @@ export default function App() {
           ...prev, 
           description: prev.description ? prev.description + '\n\n--- Сканиран текст ---\n' + extractedText : '--- Сканиран текст ---\n' + extractedText
         }));
-      } else {
-        alert("Не успях да разпозная текст на тази снимка. Опитай да снимаш по-отблизо.");
       }
     } catch (error) {
       console.error(error);
-      alert("Възникна грешка при сканирането.");
     }
     setIsScanning(false);
   };
 
-  const handleAddBook = (e) => {
+  // ЗАПАЗВАНЕ В ОБЛАКА
+  const handleAddBook = async (e) => {
     e.preventDefault();
     if (!newBook.title.trim() || !newBook.author.trim()) return;
     setIsAdding(true);
 
-    setTimeout(() => {
+    const bookDataToSave = {
+      title: newBook.title,
+      author: newBook.author,
+      publisher: newBook.publisher,
+      year: newBook.year,
+      genre: newBook.genre,
+      description: newBook.description,
+      coverUrl: newBook.customImages[0] || null,
+      customImages: newBook.customImages,
+      isPublic: newBook.isPublic,
+      isAvailable: newBook.isAvailable,
+      createdAt: Date.now()
+    };
+
+    try {
       if (editingId) {
-        setBooks(books.map(b => b.id === editingId ? { ...newBook, id: editingId, coverUrl: newBook.customImages[0] || null } : b));
+        const bookRef = doc(db, "global_books", editingId);
+        await updateDoc(bookRef, bookDataToSave);
+        setBooks(books.map(b => b.id === editingId ? { ...bookDataToSave, id: editingId } : b));
         setEditingId(null);
       } else {
-        const bookToAdd = { ...newBook, id: Date.now(), coverUrl: newBook.customImages[0] || null };
-        setBooks([bookToAdd, ...books]);
+        const docRef = await addDoc(collection(db, "global_books"), bookDataToSave);
+        setBooks([{ ...bookDataToSave, id: docRef.id }, ...books]);
       }
       
       setNewBook({ title: '', author: '', publisher: '', year: '', genre: '', description: '', customImages: [], isPublic: true, isAvailable: false });
-      setIsAdding(false);
-    }, 600);
+    } catch (error) {
+      console.error("Грешка при запис в базата:", error);
+      alert("Възникна грешка при запазването.");
+    }
+
+    setIsAdding(false);
   };
 
   const handleEditBook = (book) => {
     setNewBook({
-      title: book.title || '',
-      author: book.author || '',
-      publisher: book.publisher || '',
-      year: book.year || '',
-      genre: book.genre || '',
-      description: book.description || '',
+      title: book.title || '', author: book.author || '', publisher: book.publisher || '',
+      year: book.year || '', genre: book.genre || '', description: book.description || '',
       customImages: book.customImages || (book.coverUrl ? [book.coverUrl] : []),
-      isPublic: book.isPublic || false,
-      isAvailable: book.isAvailable || false
+      isPublic: book.isPublic || false, isAvailable: book.isAvailable || false
     });
     setEditingId(book.id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleDeleteBook = (id) => {
-    if(window.confirm("Сигурен ли си, че искаш да изтриеш тази книга?")) {
-      setBooks(books.filter(b => b.id !== id));
+  // ТРИЕНЕ ОТ ОБЛАКА
+  const handleDeleteBook = async (id) => {
+    if(window.confirm("Сигурен ли си, че искаш да изтриеш тази книга завинаги?")) {
+      try {
+        await deleteDoc(doc(db, "global_books", id));
+        setBooks(books.filter(b => b.id !== id));
+      } catch (error) {
+        console.error("Грешка при триене:", error);
+      }
     }
   };
 
@@ -219,14 +251,10 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-4 md:p-8">
       <div className="max-w-7xl mx-auto">
-        
         <div className="flex justify-center mb-8">
-          <div className="bg-white p-1 rounded-xl shadow-sm border border-slate-200 inline-flex flex-wrap justify-center">
+          <div className="bg-white p-1 rounded-xl shadow-sm border border-slate-200 inline-flex">
             <button onClick={() => setActiveTab('library')} className={activeTab === 'library' ? "flex items-center gap-2 px-6 py-3 rounded-lg font-bold transition-all bg-indigo-600 text-white shadow-md" : "flex items-center gap-2 px-6 py-3 rounded-lg font-bold transition-all text-slate-500 hover:text-indigo-600 hover:bg-slate-50"}>
               <LibraryBig size={20} /> Моята Библиотека
-            </button>
-            <button onClick={() => setActiveTab('feed')} className={activeTab === 'feed' ? "flex items-center gap-2 px-6 py-3 rounded-lg font-bold transition-all bg-emerald-600 text-white shadow-md" : "flex items-center gap-2 px-6 py-3 rounded-lg font-bold transition-all text-slate-500 hover:text-emerald-600 hover:bg-slate-50"}>
-              <Globe size={20} /> Общност и Размяна
             </button>
           </div>
         </div>
@@ -243,10 +271,7 @@ export default function App() {
                   <input type="file" accept="image/*" capture="environment" ref={fileInputRef} onChange={(e) => {
                     const file = e.target.files?.[0];
                     if(file) {
-                       if (newBook.customImages.length >= 5) {
-                         alert("Можеш да добавиш максимум 5 снимки.");
-                         return;
-                       }
+                       if (newBook.customImages.length >= 5) { alert("Максимум 5 снимки."); return; }
                        const reader = new FileReader();
                        reader.onload = (ev) => setNewBook(prev => ({...prev, customImages: [...prev.customImages, ev.target.result]}));
                        reader.readAsDataURL(file);
@@ -259,19 +284,16 @@ export default function App() {
                 
                 {newBook.customImages.length > 0 && (
                    <div className="mb-4">
-                     <div className="flex gap-3 overflow-x-auto pb-2 snap-x">
+                     <div className="flex gap-3 overflow-x-auto pb-2">
                        {newBook.customImages.map((img, idx) => (
-                         <div key={idx} className="relative w-24 h-32 flex-shrink-0 rounded-lg overflow-hidden shadow-md border border-slate-200 snap-center">
-                            <img src={img} alt={`Снимка ${idx + 1}`} className="w-full h-full object-cover" />
-                            <button type="button" onClick={() => setNewBook(prev => ({...prev, customImages: prev.customImages.filter((_, i) => i !== idx)}))} className="absolute top-1 right-1 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 transition-colors z-10">
-                              <X size={12}/>
-                            </button>
+                         <div key={idx} className="relative w-24 h-32 flex-shrink-0 rounded-lg overflow-hidden shadow-md border border-slate-200">
+                            <img src={img} alt="preview" className="w-full h-full object-cover" />
+                            <button type="button" onClick={() => setNewBook(prev => ({...prev, customImages: prev.customImages.filter((_, i) => i !== idx)}))} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1"><X size={12}/></button>
                          </div>
                        ))}
                      </div>
-                     <button type="button" onClick={handleScanText} disabled={isScanning} className="mt-3 w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors">
-                        {isScanning ? <Loader2 size={16} className="animate-spin" /> : <ScanText size={16} />} 
-                        {isScanning ? "Разпознаване..." : "Извлечи текст от първата снимка"}
+                     <button type="button" onClick={handleScanText} disabled={isScanning} className="mt-3 w-full py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium flex items-center justify-center gap-2">
+                        {isScanning ? <Loader2 size={16} className="animate-spin" /> : <ScanText size={16} />} Текст от снимка
                      </button>
                    </div>
                 )}
@@ -279,25 +301,28 @@ export default function App() {
                 <form onSubmit={handleAddBook} className="space-y-4">
                   <div className="relative">
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Заглавие *</label>
-                    <input type="text" required value={newBook.title} onChange={(e) => { setNewBook({...newBook, title: e.target.value}); setActiveField('title'); }} onFocus={() => setActiveField('title')} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" />
+                    <input type="text" required value={newBook.title} onChange={(e) => { setNewBook({...newBook, title: e.target.value}); setActiveField('title'); }} onFocus={() => setActiveField('title')} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg outline-none" />
                   </div>
                   
                   <div className="relative">
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Автор *</label>
-                    <input type="text" required value={newBook.author} onChange={(e) => { setNewBook({...newBook, author: e.target.value}); setActiveField('author'); }} onFocus={() => setActiveField('author')} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" />
+                    <input type="text" required value={newBook.author} onChange={(e) => { setNewBook({...newBook, author: e.target.value}); setActiveField('author'); }} onFocus={() => setActiveField('author')} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg outline-none" />
                   </div>
 
                   {activeField && (newBook[activeField]?.length >= 3) && (
                     <div className="absolute z-20 w-full max-w-sm bg-white border border-slate-200 mt-[-10px] rounded-xl shadow-2xl overflow-hidden">
                       {isFetchingInfo ? (
-                        <div className="px-4 py-6 text-slate-500 text-sm flex items-center justify-center gap-2 bg-slate-50"><Loader2 size={18} className="animate-spin text-indigo-500" /> Търсене...</div>
+                        <div className="px-4 py-6 text-slate-500 text-sm flex justify-center gap-2 bg-slate-50"><Loader2 size={18} className="animate-spin text-indigo-500" /> Търсене...</div>
                       ) : suggestions.length > 0 ? (
                         <ul className="max-h-60 overflow-y-auto">
                           {suggestions.map((suggestion, index) => (
                             <li key={index} onClick={() => handleSelectSuggestion(suggestion)} className="p-3 hover:bg-slate-50 cursor-pointer border-b border-slate-100 flex gap-3 items-center">
                               {suggestion.coverUrl ? <img src={suggestion.coverUrl} className="w-8 h-12 object-cover rounded shadow-sm" alt="cover"/> : <div className="w-8 h-12 bg-slate-200 rounded flex items-center justify-center text-slate-400"><Book size={14}/></div>}
                               <div className="flex-1 min-w-0">
-                                <p className="text-sm font-bold text-slate-900 truncate">{suggestion.title}</p>
+                                <p className="text-sm font-bold text-slate-900 truncate">
+                                  {suggestion.title}
+                                  {suggestion.isLocal && <span className="bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0.5 rounded ml-2 font-medium">БГ База</span>}
+                                </p>
                                 <p className="text-xs text-slate-500 truncate">{suggestion.author}</p>
                               </div>
                             </li>
@@ -323,32 +348,18 @@ export default function App() {
 
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Жанр</label>
-                    <input type="text" value={newBook.genre} onChange={(e) => setNewBook({...newBook, genre: e.target.value})} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg outline-none text-sm" placeholder="напр. Фантастика, Роман" />
+                    <input type="text" value={newBook.genre} onChange={(e) => setNewBook({...newBook, genre: e.target.value})} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg outline-none text-sm" />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Описание / Бележки</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Описание</label>
                     <textarea value={newBook.description} onChange={(e) => setNewBook({...newBook, description: e.target.value})} rows="3" className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg outline-none text-sm resize-none"></textarea>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 mt-4">
-                    <div className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-xl cursor-pointer" onClick={() => setNewBook({...newBook, isPublic: !newBook.isPublic})}>
-                      <div className="flex justify-between items-center mb-1"><span className="text-xs font-bold text-indigo-900">Публична</span><input type="checkbox" checked={newBook.isPublic} readOnly className="w-3 h-3 text-indigo-600 rounded" /></div>
-                    </div>
-                    <div className={newBook.isAvailable ? "p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl cursor-pointer" : "p-3 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer"} onClick={() => { if(newBook.isPublic) setNewBook({...newBook, isAvailable: !newBook.isAvailable}) }}>
-                       <div className="flex justify-between items-center mb-1"><span className={newBook.isAvailable ? "text-xs font-bold text-emerald-900" : "text-xs font-bold text-slate-500"}>Давам я</span><input type="checkbox" checked={newBook.isAvailable} disabled={!newBook.isPublic} readOnly className="w-3 h-3 text-emerald-600 rounded" /></div>
-                    </div>
-                  </div>
-
                   <div className="flex gap-2 pt-2">
-                    {editingId && (
-                      <button type="button" onClick={cancelEdit} className="w-1/3 bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium py-3 rounded-xl transition-colors">
-                        Отказ
-                      </button>
-                    )}
-                    <button type="submit" disabled={isAdding} className={`flex-1 ${editingId ? 'bg-amber-500 hover:bg-amber-600' : 'bg-indigo-600 hover:bg-indigo-700'} text-white font-medium py-3 rounded-xl transition-colors flex items-center justify-center gap-2`}>
-                      {isAdding ? <Loader2 size={18} className="animate-spin" /> : (editingId ? <Edit3 size={18}/> : <BookOpen size={18} />)} 
-                      {editingId ? "Обнови" : "Запази"}
+                    {editingId && <button type="button" onClick={cancelEdit} className="w-1/3 bg-slate-200 text-slate-700 font-medium py-3 rounded-xl">Отказ</button>}
+                    <button type="submit" disabled={isAdding} className={`flex-1 ${editingId ? 'bg-amber-500' : 'bg-indigo-600'} text-white font-medium py-3 rounded-xl flex items-center justify-center gap-2`}>
+                      {isAdding ? <Loader2 size={18} className="animate-spin" /> : <BookOpen size={18} />} {editingId ? "Обнови" : "Запази"}
                     </button>
                   </div>
                 </form>
@@ -358,48 +369,28 @@ export default function App() {
             <div className="lg:col-span-8">
               <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 mb-6 flex items-center gap-3">
                 <Search size={20} className="text-slate-400" />
-                <input 
-                  type="text" 
-                  value={searchMyBooks}
-                  onChange={(e) => setSearchMyBooks(e.target.value)}
-                  placeholder="Търси в твоята библиотека по заглавие или автор..." 
-                  className="flex-1 bg-transparent outline-none text-sm"
-                />
-                {searchMyBooks && <button type="button" onClick={() => setSearchMyBooks('')}><X size={16} className="text-slate-400"/></button>}
+                <input type="text" value={searchMyBooks} onChange={(e) => setSearchMyBooks(e.target.value)} placeholder="Търси в твоята библиотека..." className="flex-1 bg-transparent outline-none text-sm" />
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {filteredBooks.length === 0 && <div className="col-span-full text-center text-slate-400 py-12">Няма намерени книги.</div>}
-                
-                {filteredBooks.map((book) => {
-                  return (
-                    <div key={book.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 relative flex flex-col overflow-hidden hover:shadow-md transition-shadow group">
-                      <div className="flex h-36">
-                        <div className="w-24 bg-slate-100 flex-shrink-0 flex items-center justify-center border-r border-slate-100 relative">
-                          {book.coverUrl ? <img src={book.coverUrl} alt="cover" className="w-full h-full object-cover" /> : <Book size={24} className="text-slate-300" />}
-                        </div>
-                        <div className="p-4 flex flex-col flex-grow min-w-0">
-                          <div className="flex justify-between items-start">
-                            <div className="min-w-0 pr-2">
-                              <h3 className="font-bold text-sm text-slate-900 line-clamp-2 leading-tight mb-1">{book.title}</h3>
-                              <p className="text-slate-600 text-xs truncate">{book.author}</p>
-                              {book.year && <p className="text-slate-400 text-[10px] mt-1">{book.year} {book.publisher && `• ${book.publisher}`}</p>}
-                            </div>
-                          </div>
-                          <div className="mt-auto flex gap-2">
-                            {book.isPublic && <span className="bg-indigo-50 text-indigo-600 text-[10px] px-2 py-1 rounded font-medium">Публична</span>}
-                            {book.isAvailable && <span className="bg-emerald-50 text-emerald-600 text-[10px] px-2 py-1 rounded font-medium">За заемане</span>}
-                          </div>
-                        </div>
+                {filteredBooks.map((book) => (
+                  <div key={book.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 relative flex flex-col overflow-hidden hover:shadow-md transition-shadow group">
+                    <div className="flex h-36">
+                      <div className="w-24 bg-slate-100 flex-shrink-0 flex items-center justify-center border-r border-slate-100 relative">
+                        {book.coverUrl ? <img src={book.coverUrl} alt="cover" className="w-full h-full object-cover" /> : <Book size={24} className="text-slate-300" />}
                       </div>
-                      
-                      <div className="absolute top-2 right-2 flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity bg-white/90 rounded-lg p-1 shadow-sm backdrop-blur-sm">
-                        <button type="button" onClick={() => handleEditBook(book)} className="p-1.5 text-slate-500 hover:text-amber-500 rounded bg-white"><Edit3 size={14}/></button>
-                        <button type="button" onClick={() => handleDeleteBook(book.id)} className="p-1.5 text-slate-500 hover:text-red-500 rounded bg-white"><Trash2 size={14}/></button>
+                      <div className="p-4 flex flex-col flex-grow min-w-0">
+                        <h3 className="font-bold text-sm text-slate-900 line-clamp-2 leading-tight mb-1">{book.title}</h3>
+                        <p className="text-slate-600 text-xs truncate">{book.author}</p>
+                        {book.year && <p className="text-slate-400 text-[10px] mt-1">{book.year} {book.publisher && `• ${book.publisher}`}</p>}
                       </div>
                     </div>
-                  );
-                })}
+                    <div className="absolute top-2 right-2 flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity bg-white/90 rounded-lg p-1 shadow-sm">
+                      <button type="button" onClick={() => handleEditBook(book)} className="p-1.5 text-slate-500 hover:text-amber-500 rounded"><Edit3 size={14}/></button>
+                      <button type="button" onClick={() => handleDeleteBook(book.id)} className="p-1.5 text-slate-500 hover:text-red-500 rounded"><Trash2 size={14}/></button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
